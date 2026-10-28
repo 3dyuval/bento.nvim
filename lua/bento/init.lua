@@ -863,14 +863,27 @@ function M.setup(config)
         require("bento").enforce_buffer_limit()
     end, 50)
 
-    vim.defer_fn(function()
+    -- Opinionated auto-show: open the menu once the editor is ready, when a
+    -- minimal menu is configured (or in tabline mode). Driven by VimEnter so it
+    -- fires after buffers are loaded — robust vs the old fixed timer. If the
+    -- editor already entered (plugin loaded lazily after startup), open now.
+    local function auto_show()
         require("bento.ui").setup_state()
-        if BentoConfig.ui.mode == "tabline" then
-            require("bento.ui").toggle_menu()
-        elseif BentoConfig.ui.floating.minimal_menu then
+        if BentoConfig.ui.mode == "tabline" or BentoConfig.ui.floating.minimal_menu then
             require("bento.ui").toggle_menu()
         end
-    end, 100)
+    end
+    if vim.v.vim_did_enter == 1 then
+        vim.schedule(auto_show)
+    else
+        vim.api.nvim_create_autocmd("VimEnter", {
+            once = true,
+            callback = function()
+                vim.schedule(auto_show)
+            end,
+            desc = "Bento: auto-show menu on startup",
+        })
+    end
 
     setup_autocmds()
 

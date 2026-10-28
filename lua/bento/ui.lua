@@ -1955,6 +1955,15 @@ function M.refresh_menu()
 
     -- Floating UI
     if not bento_win_id or not vim.api.nvim_win_is_valid(bento_win_id) then
+        -- Opinionated "always shown": when a minimal menu is configured, a
+        -- refresh with no live window reopens it (rather than no-op'ing), so
+        -- the dashed list reappears after close / buffer churn. Needs buffers.
+        if minimal_menu_active then
+            update_marks()
+            if #marks > 0 then
+                M.toggle_menu()
+            end
+        end
         return
     end
 
