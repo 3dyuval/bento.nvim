@@ -2,8 +2,9 @@
 
 Design contract for the menu lifecycle. Written before retiring `ui.lua`'s
 scattered boolean state (`is_expanded`, window handles, `minimal_menu_active`,
-pagination, tabline flags) in favour of a single state machine (`state.lua`,
-built on vendored `fsm.lua`). This is the source of truth the rewrite must
+pagination, tabline flags) in favour of a single ad-hoc state machine
+(`state.lua` — transition table + `fire`, no generic engine). This is the
+source of truth the rewrite must
 preserve; it captures *current* behaviour (observed in `ui.lua`), not an
 idealised one — divergences are called out as `[CHANGE]`.
 
@@ -114,7 +115,6 @@ Sources, highest → lowest:
   --------+--------------+--------------+----------------
   minimal_menu          | —            | ui.floating.minimal_menu | nil
   toggle_on_reexpand    | —            | ui.floating.toggle_...   | true
-  auto_show             | —            | ui.floating.auto_show    | nil  [PROPOSED]
   default_action        | set_default_action | config.default_action | nil
 ```
 
@@ -131,9 +131,6 @@ C2: `toggle_on_reexpand` gates open_menu: if true and already open, the expand
     key closes the menu instead of re-expanding (M.open_menu L2013).     [HOLDS]
 C3: registered_* keys are resolved at setup (api.register_*), never change at
     runtime. They are config-tier but stored in ctx for locality.        [HOLDS]
-C4 [PROPOSED]: `auto_show = N` makes the refresh action keep a collapsed menu
-    open whenever #marks >= N and close it below. Implemented as a guard on
-    the refresh action, not a new state.                                  [TODO]
 ```
 
 ## Public API (must be preserved)
@@ -170,8 +167,7 @@ M3: when ui.lua is an empty shim, delete it and repoint requires.
 
 | File | Role |
 |---|---|
-| `lua/bento/fsm.lua` | Vendored lua-fsm (MIT) — generic state machine engine |
-| `lua/bento/state.lua` | Bento menu machine: states, events, guards, context, render/teardown actions. Target home for all of ui.lua |
+| `lua/bento/state.lua` | Bento menu machine (ad-hoc): states, events, guards, context, render/teardown actions. Target home for all of ui.lua |
 | `lua/bento/ui.lua` | BEING RETIRED — current monolith; shrinks to a shim then deleted |
 | `lua/bento/actions.lua` | Buffer actions (open/delete/split…); calls collapse/refresh |
 | `lua/bento/api.lua` | Public API surface; registers keys, dispatches events |
