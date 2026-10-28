@@ -80,6 +80,9 @@ function M:fire(event)
     return false
   end
   local from = self.current
+  require("bento.notify").debug(
+    ("menu: %s --%s--> %s"):format(from, event, to)
+  )
   local leave = self.hooks["on_leave_" .. from]
   local enter = self.hooks["on_enter_" .. to]
   if leave then
