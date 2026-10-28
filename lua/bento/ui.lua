@@ -5,6 +5,7 @@ local bento = require("bento")
 local utils = require("bento.utils")
 local notify = require("bento.notify")
 local render = require("bento.render")
+local tabline = require("bento.tabline")
 local marks = require("bento").marks
 local line_keys = require("bento").line_keys
 
@@ -45,30 +46,6 @@ local current_action = nil
 --- Current state of minimal menu (nil | "dashed" | "filename" | "full")
 --- @type string|nil
 local minimal_menu_active = nil
-
---- Whether tabline UI is active
---- @type boolean
-local tabline_active = false
-
---- Original tabline setting
---- @type string|nil
-local saved_tabline = nil
-
---- Original showtabline setting
---- @type number|nil
-local saved_showtabline = nil
-
---- Cache for smart labels used by tabline
---- @type table<number, string>
-local smart_labels_cache = {}
-
---- First buffer index to display in tabline (1-indexed)
---- @type number
-local tabline_start_idx = 1
-
---- Last buffer index displayed in tabline (1-indexed)
---- @type number
-local tabline_end_idx = 1
 
 --- Current page for floating UI pagination (1-indexed)
 --- @type number
@@ -817,386 +794,6 @@ local function set_selection_keybindings(smart_labels)
 end
 
 
---- Calculate segment widths for all marks (used for tabline pagination)
---- @return number[] Array of widths for each mark
-local function get_tabline_segment_widths()
-    config = bento.get_config()
-    local smart_labels = assign_smart_labels(marks, get_available_keys())
-    local lock_char = config.lock_char or "🔒"
-
-    local all_paths = {}
-    for _, mark in ipairs(marks) do
-        table.insert(all_paths, mark.filename)
-    end
-    local display_names = utils.get_display_names(all_paths)
-
-    local widths = {}
-    for i, mark in ipairs(marks) do
-        local label = smart_labels[i] or " "
-        local display_name = display_names[mark.filename]
-            or utils.get_file_name(mark.filename)
-        local is_locked = bento.is_locked(mark.buf_id)
-
-        local width = 0
-        if label and label ~= " " then
-            width = width + 1 + vim.fn.strwidth(label) + 1
-        end
-        if is_locked then
-            width = width + 1 + vim.fn.strwidth(lock_char)
-        end
-        width = width + 1 + vim.fn.strwidth(display_name)
-
-        table.insert(widths, width)
-    end
-
-    return widths
-end
-
---- Calculate the start index for the previous page in tabline
---- @param current_start_idx number Current starting index
---- @return number Start index for previous page
-local function get_tabline_prev_page_start(current_start_idx)
-    if current_start_idx <= 1 then
-        return 1
-    end
-
-    config = bento.get_config()
-    local ui = vim.api.nvim_list_uis()[1]
-    local screen_width = ui and ui.width or 80
-    local separator_symbol = config.ui.tabline.separator_symbol or "|"
-    local separator_width = 1 + vim.fn.strwidth(separator_symbol) + 1 -- " symbol " between segments
-    local left_symbol = config.ui.tabline.left_page_symbol or "❮"
-    local right_symbol = config.ui.tabline.right_page_symbol or "❯"
-    local left_symbol_width = vim.fn.strwidth(left_symbol)
-    local right_symbol_width = vim.fn.strwidth(right_symbol)
-    local left_symbol_with_spacing = 1 + left_symbol_width + 2 -- 1-space margin + symbol + 2-space gap
-    local right_symbol_with_spacing = 2 + right_symbol_width + 1 -- 2-space gap + symbol + 1-space margin
-
-    local widths = get_tabline_segment_widths()
-
-    local target_end_idx = current_start_idx - 1
-
-    local available_width = screen_width - right_symbol_with_spacing -- reserve for trailing symbol + gap
-
-    local total_width = 0
-    local start_idx = target_end_idx
-
-    for i = target_end_idx, 1, -1 do
-        local seg_width = widths[i]
-        local needed_width = seg_width
-        if i < target_end_idx then
-            needed_width = needed_width + separator_width
-        end
-
-        local has_prev = i > 1
-        local test_available = available_width
-        if has_prev then
-            test_available = test_available - left_symbol_with_spacing
-        end
-
-        if total_width + needed_width <= test_available then
-            total_width = total_width + needed_width
-            start_idx = i
-        else
-            break
-        end
-    end
-
-    return start_idx
-end
-
---- Generate the tabline string for rendering
---- @param is_minimal boolean If true, uses minimal highlight for labels
---- @return string tabline_string The formatted tabline string
---- @return number end_idx Last visible buffer index
-local function generate_tabline_string(is_minimal)
-    config = bento.get_config()
-    update_marks()
-
-    if #marks == 0 then
-        return "", 0
-    end
-
-    local smart_labels = assign_smart_labels(marks, get_available_keys())
-    smart_labels_cache = smart_labels
-    local lock_char = config.lock_char or "🔒"
-    local window_bg_hl = config.highlights.window_bg
-    local page_indicator_hl = config.highlights.page_indicator
-
-    local all_paths = {}
-    for _, mark in ipairs(marks) do
-        table.insert(all_paths, mark.filename)
-    end
-    local display_names = utils.get_display_names(all_paths)
-
-    -- Creates a tabline-specific highlight group with window_bg background
-    local function get_tabline_hl(base_hl)
-        local tabline_hl_name = "BentoTabline_" .. base_hl
-        local base_hl_info =
-            vim.api.nvim_get_hl(0, { name = base_hl, link = false })
-        local fg = base_hl_info.fg
-        local bg_hl_info =
-            vim.api.nvim_get_hl(0, { name = window_bg_hl, link = false })
-        vim.api.nvim_set_hl(0, tabline_hl_name, {
-            fg = fg,
-            bg = bg_hl_info.bg,
-            bold = base_hl_info.bold,
-            italic = base_hl_info.italic,
-            underline = base_hl_info.underline,
-        })
-        return tabline_hl_name
-    end
-
-    local tabline_page_indicator_hl = get_tabline_hl(page_indicator_hl)
-
-    local separator_hl = config.highlights.separator or "Normal"
-    local tabline_separator_hl = get_tabline_hl(separator_hl)
-    local separator_symbol = config.ui.tabline.separator_symbol or "|"
-
-    -- Calculates the display width of a buffer segment
-    local function get_segment_width(label, display_name, is_locked)
-        local width = 0
-        if label and label ~= " " then
-            width = width + 1 + vim.fn.strwidth(label) + 1
-        end
-        if is_locked then
-            width = width + 1 + vim.fn.strwidth(lock_char)
-        end
-        width = width + 1 + vim.fn.strwidth(display_name)
-        return width
-    end
-
-    local last_accessed_buf = get_last_accessed_buffer()
-    local all_segments = {}
-    for i, mark in ipairs(marks) do
-        local label = smart_labels[i] or " "
-        local display_name = display_names[mark.filename]
-            or utils.get_file_name(mark.filename)
-        local is_locked = bento.is_locked(mark.buf_id)
-        local is_current = is_current_buffer(mark.buf_id)
-        local is_active = is_buffer_active(mark.buf_id)
-        local is_modified = vim.api.nvim_buf_get_option(mark.buf_id, "modified")
-
-        local label_hl
-        local is_previous_buffer = mark.buf_id == last_accessed_buf
-        if is_minimal then
-            label_hl = config.highlights.label_minimal
-        elseif is_previous_buffer then
-            label_hl = config.highlights.previous
-        else
-            local action_name = current_action
-                or config.default_action
-                or "open"
-            label_hl = config.highlights.label
-            if
-                config.actions[action_name] and config.actions[action_name].hl
-            then
-                label_hl = config.actions[action_name].hl
-            end
-        end
-
-        local filename_hl
-        if is_modified then
-            filename_hl = config.highlights.modified
-        elseif is_current then
-            filename_hl = config.highlights.current
-        elseif is_active then
-            filename_hl = config.highlights.active
-        else
-            filename_hl = config.highlights.inactive
-        end
-
-        local tabline_filename_hl = get_tabline_hl(filename_hl)
-
-        local segment = ""
-        if label and label ~= " " then
-            segment = segment .. "%#" .. label_hl .. "#" .. " " .. label .. " "
-        end
-        if is_locked then
-            segment = segment
-                .. "%#"
-                .. tabline_filename_hl
-                .. "#"
-                .. " "
-                .. lock_char
-        end
-        segment = segment
-            .. "%#"
-            .. tabline_filename_hl
-            .. "#"
-            .. " "
-            .. display_name
-
-        table.insert(all_segments, {
-            segment = segment,
-            width = get_segment_width(label, display_name, is_locked),
-        })
-    end
-
-    local ui = vim.api.nvim_list_uis()[1]
-    local screen_width = ui and ui.width or 80
-    local separator_width = 1 + vim.fn.strwidth(separator_symbol) + 1 -- " symbol " between segments
-    local left_symbol = config.ui.tabline.left_page_symbol or "❮"
-    local right_symbol = config.ui.tabline.right_page_symbol or "❯"
-    local left_symbol_width = vim.fn.strwidth(left_symbol)
-    local right_symbol_width = vim.fn.strwidth(right_symbol)
-    local left_symbol_with_spacing = 1 + left_symbol_width + 2 -- 1-space margin + symbol + 2-space gap
-    local right_symbol_with_spacing = 2 + right_symbol_width + 1 -- 2-space gap + symbol + 1-space margin
-
-    if tabline_start_idx < 1 then
-        tabline_start_idx = 1
-    elseif tabline_start_idx > #marks then
-        tabline_start_idx = #marks
-    end
-
-    local has_prev = tabline_start_idx > 1
-    local available_width = screen_width
-    if has_prev then
-        available_width = available_width - left_symbol_with_spacing
-    end
-
-    local visible_segments = {}
-    local current_width = 0
-    local end_idx = tabline_start_idx
-
-    for i = tabline_start_idx, #all_segments do
-        local seg = all_segments[i]
-        local needed_width = seg.width
-        if #visible_segments > 0 then
-            needed_width = needed_width + separator_width
-        end
-
-        local remaining_buffers = #all_segments - i
-        local need_trailing_symbol = remaining_buffers > 0
-        local width_with_trailing = current_width + needed_width
-        if need_trailing_symbol then
-            width_with_trailing = width_with_trailing
-                + right_symbol_with_spacing
-        end
-
-        if width_with_trailing <= available_width then
-            table.insert(visible_segments, seg)
-            current_width = current_width + needed_width
-            end_idx = i
-        else
-            break
-        end
-    end
-
-    local has_next = end_idx < #all_segments
-
-    local parts = {}
-
-    if has_prev then
-        table.insert(
-            parts,
-            "%#"
-                .. window_bg_hl
-                .. "# "
-                .. "%#"
-                .. tabline_page_indicator_hl
-                .. "#"
-                .. left_symbol
-                .. "%#"
-                .. window_bg_hl
-                .. "#  "
-        )
-    end
-
-    local segment_strings = {}
-    for _, seg in ipairs(visible_segments) do
-        table.insert(segment_strings, seg.segment)
-    end
-    local separator = "%#"
-        .. window_bg_hl
-        .. "# "
-        .. "%#"
-        .. tabline_separator_hl
-        .. "#"
-        .. separator_symbol
-        .. "%#"
-        .. window_bg_hl
-        .. "# "
-    table.insert(parts, table.concat(segment_strings, separator))
-
-    if has_next then
-        table.insert(
-            parts,
-            "%#"
-                .. window_bg_hl
-                .. "#  %="
-                .. "%#"
-                .. tabline_page_indicator_hl
-                .. "#"
-                .. right_symbol
-                .. "%#"
-                .. window_bg_hl
-                .. "# "
-        )
-    else
-        table.insert(parts, "%#" .. window_bg_hl .. "#%=")
-    end
-
-    return table.concat(parts, ""), end_idx
-end
-
---- Render tabline in expanded state (labels visible, keymaps active)
---- @return nil
-local function render_tabline_expanded()
-    config = bento.get_config()
-    update_marks()
-
-    if #marks == 0 then
-        return
-    end
-
-    local tabline_str, end_idx = generate_tabline_string(false)
-    tabline_end_idx = end_idx
-    vim.o.tabline = tabline_str
-    vim.o.showtabline = 2
-
-    local smart_labels = smart_labels_cache
-    set_selection_keybindings(smart_labels)
-end
-
---- Render tabline in minimal state
---- @return nil
-local function render_tabline_minimal()
-    config = bento.get_config()
-    update_marks()
-
-    if #marks == 0 then
-        return
-    end
-
-    local tabline_str, end_idx = generate_tabline_string(true)
-    tabline_end_idx = end_idx
-    vim.o.tabline = tabline_str
-    vim.o.showtabline = 2
-
-    clear_selection_keymaps()
-end
-
---- Save original tabline settings
---- @return nil
-local function save_tabline_settings()
-    if saved_tabline == nil then
-        saved_tabline = vim.o.tabline
-        saved_showtabline = vim.o.showtabline
-    end
-end
-
---- Restore original tabline settings
---- @return nil
-local function restore_tabline_settings()
-    if saved_tabline ~= nil then
-        vim.o.tabline = saved_tabline
-        vim.o.showtabline = saved_showtabline
-        saved_tabline = nil
-        saved_showtabline = nil
-    end
-end
-
 --- Render the appropriate collapsed view based on minimal_menu mode
 --- @return nil
 local function render_collapsed(state)
@@ -1222,6 +819,15 @@ render.setup({
     set_selection_keybindings = set_selection_keybindings,
 })
 
+-- Inject the ui-side helpers the tabline render module depends on.
+tabline.setup({
+    update_marks = update_marks,
+    assign_smart_labels = assign_smart_labels,
+    get_available_keys = get_available_keys,
+    set_selection_keybindings = set_selection_keybindings,
+    clear_selection_keymaps = clear_selection_keymaps,
+})
+
 --- Menu state machine. Owns the closed/collapsed/expanded lifecycle; its
 --- on_enter_* hooks dispatch the right render for the current UI mode. The
 --- lifecycle functions below fire transitions instead of flipping is_expanded.
@@ -1232,7 +838,7 @@ local menu = State.new({
     on_enter_collapsed = function()
         is_expanded = false
         if is_tabline_ui() then
-            render_tabline_minimal()
+            tabline.minimal(menu)
         else
             render_collapsed(menu)
         end
@@ -1240,7 +846,7 @@ local menu = State.new({
     on_enter_expanded = function()
         is_expanded = true
         if is_tabline_ui() then
-            render_tabline_expanded()
+            tabline.expanded(menu)
         else
             render.expanded(menu)
         end
@@ -1255,9 +861,9 @@ local menu = State.new({
 function M.close_menu()
     menu:close()
     if is_tabline_ui() then
-        restore_tabline_settings()
-        tabline_active = false
-        tabline_start_idx = 1
+        tabline.restore_settings(menu)
+        menu.tabline_active = false
+        menu.tabline_start = 1
         current_action = nil
         clear_selection_keymaps()
         return
@@ -1278,12 +884,12 @@ end
 --- @return nil
 function M.next_page()
     if is_tabline_ui() then
-        if not tabline_active or not is_expanded then
+        if not menu.tabline_active or not is_expanded then
             return
         end
-        if tabline_end_idx < #marks then
-            tabline_start_idx = tabline_end_idx + 1
-            render_tabline_expanded()
+        if menu.tabline_end < #marks then
+            menu.tabline_start = menu.tabline_end + 1
+            tabline.expanded(menu)
         end
         return
     end
@@ -1307,12 +913,12 @@ end
 --- @return nil
 function M.prev_page()
     if is_tabline_ui() then
-        if not tabline_active or not is_expanded then
+        if not menu.tabline_active or not is_expanded then
             return
         end
-        if tabline_start_idx > 1 then
-            tabline_start_idx = get_tabline_prev_page_start(tabline_start_idx)
-            render_tabline_expanded()
+        if menu.tabline_start > 1 then
+            menu.tabline_start = tabline.prev_page_start(menu, menu.tabline_start)
+            tabline.expanded(menu)
         end
         return
     end
@@ -1339,7 +945,7 @@ function M.toggle_menu(force_create)
     M.setup_state()
 
     if is_tabline_ui() then
-        if tabline_active then
+        if menu.tabline_active then
             M.close_menu()
             return
         end
@@ -1364,9 +970,9 @@ function M.toggle_menu(force_create)
             return
         end
 
-        save_tabline_settings()
-        tabline_active = true
-        tabline_start_idx = 1
+        tabline.save_settings(menu)
+        menu.tabline_active = true
+        menu.tabline_start = 1
         menu:open()
         return
     end
@@ -1436,7 +1042,7 @@ function M.expand_menu()
     end
 
     if is_tabline_ui() then
-        if not tabline_active then
+        if not menu.tabline_active then
             return
         end
         current_action = config.default_action
@@ -1459,11 +1065,11 @@ function M.collapse_menu()
     M.setup_state()
 
     if is_tabline_ui() then
-        if not tabline_active then
+        if not menu.tabline_active then
             return
         end
         current_action = nil
-        tabline_start_idx = 1
+        menu.tabline_start = 1
         menu:collapse()
         return
     end
@@ -1533,7 +1139,7 @@ function M.select_buffer(idx)
         notify.error("Action failed: " .. tostring(err))
     else
         current_page = 1
-        tabline_start_idx = 1
+        menu.tabline_start = 1
     end
 end
 
@@ -1550,7 +1156,7 @@ function M.set_action_mode(action_name)
     notify.info("Action mode: " .. action_name)
 
     if is_tabline_ui() then
-        render_tabline_expanded()
+        tabline.expanded(menu)
     else
         render.expanded(menu)
     end
@@ -1562,7 +1168,7 @@ function M.refresh_menu()
     M.setup_state()
 
     if is_tabline_ui() then
-        if not tabline_active then
+        if not menu.tabline_active then
             return
         end
 
@@ -1574,9 +1180,9 @@ function M.refresh_menu()
         end
 
         if is_expanded then
-            render_tabline_expanded()
+            tabline.expanded(menu)
         else
-            render_tabline_minimal()
+            tabline.minimal(menu)
         end
         return
     end

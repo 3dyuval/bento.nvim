@@ -22,6 +22,12 @@
 --- @field minimal_mode string|nil resolved collapsed render mode (latched)
 --- @field current_action string|nil active action (expanded only)
 --- @field page number floating pagination page (1-indexed)
+--- @field tabline_active boolean whether the tabline UI is currently rendered
+--- @field tabline_start number first buffer index shown in tabline (1-indexed)
+--- @field tabline_end number last buffer index shown in tabline (1-indexed)
+--- @field saved_tabline string|nil original &tabline, restored on close
+--- @field saved_showtabline number|nil original &showtabline, restored on close
+--- @field smart_labels table<number, string> cached per-buffer labels (tabline)
 local M = {}
 M.__index = M
 
@@ -47,6 +53,12 @@ function M.new(hooks)
     minimal_mode = nil,
     current_action = nil,
     page = 1,
+    tabline_active = false,
+    tabline_start = 1,
+    tabline_end = 1,
+    saved_tabline = nil,
+    saved_showtabline = nil,
+    smart_labels = {},
   }, M)
 end
 
