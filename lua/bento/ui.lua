@@ -1594,13 +1594,41 @@ local function render_collapsed()
     end
 end
 
+--- Menu state machine. Owns the closed/collapsed/expanded lifecycle; its
+--- on_enter_* hooks dispatch the right render for the current UI mode. The
+--- lifecycle functions below fire transitions instead of flipping is_expanded.
+--- (This pass wires transitions only; the remaining module-level state vars
+--- still live here and migrate to the instance in a follow-up.)
+local State = require("bento.state")
+local menu = State.new({
+    on_enter_collapsed = function()
+        is_expanded = false
+        if is_tabline_ui() then
+            render_tabline_minimal()
+        else
+            render_collapsed()
+        end
+    end,
+    on_enter_expanded = function()
+        is_expanded = true
+        if is_tabline_ui() then
+            render_tabline_expanded()
+        else
+            render_expanded()
+        end
+    end,
+    on_enter_closed = function()
+        is_expanded = false
+    end,
+})
+
 --- Close the menu completely
 --- @return nil
 function M.close_menu()
+    menu:close()
     if is_tabline_ui() then
         restore_tabline_settings()
         tabline_active = false
-        is_expanded = false
         tabline_start_idx = 1
         current_action = nil
         clear_selection_keymaps()
@@ -1613,7 +1641,6 @@ function M.close_menu()
     end
     bento_win_id = nil
     bento_bufh = nil
-    is_expanded = false
     current_action = nil
     current_page = 1
     clear_selection_keymaps()
@@ -1711,9 +1738,8 @@ function M.toggle_menu(force_create)
 
         save_tabline_settings()
         tabline_active = true
-        is_expanded = false
         tabline_start_idx = 1
-        render_tabline_minimal()
+        menu:open()
         return
     end
 
@@ -1755,11 +1781,11 @@ function M.toggle_menu(force_create)
     bento_win_id = win_info.win_id
     bento_bufh = win_info.bufnr
 
-    is_expanded = false
     current_page = 1
-    if minimal_menu_active then
-        render_collapsed()
-    end
+    -- menu:open() enters `collapsed`; the on_enter hook renders via
+    -- render_collapsed(), which is a no-op when minimal_menu_active is nil,
+    -- preserving the old "force_create with no minimal mode = window only".
+    menu:open()
 end
 
 --- Expand menu to show labels and names
@@ -1785,9 +1811,8 @@ function M.expand_menu()
         if not tabline_active then
             return
         end
-        is_expanded = true
         current_action = config.default_action
-        render_tabline_expanded()
+        menu:expand()
         return
     end
 
@@ -1796,9 +1821,8 @@ function M.expand_menu()
         return
     end
 
-    is_expanded = true
     current_action = config.default_action
-    render_expanded()
+    menu:expand()
 end
 
 --- Collapse menu back to minimal view
@@ -1810,10 +1834,9 @@ function M.collapse_menu()
         if not tabline_active then
             return
         end
-        is_expanded = false
         current_action = nil
         tabline_start_idx = 1
-        render_tabline_minimal()
+        menu:collapse()
         return
     end
 
@@ -1827,10 +1850,9 @@ function M.collapse_menu()
         return
     end
 
-    is_expanded = false
     current_action = nil
     current_page = 1
-    render_collapsed()
+    menu:collapse()
 end
 
 --- Select buffer by index
