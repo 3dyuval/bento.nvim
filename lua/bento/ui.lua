@@ -817,12 +817,13 @@ end
 
 --- Display menu in dashed collapsed state
 --- @return nil
-local function render_dashed()
-    if not bento_bufh or not vim.api.nvim_buf_is_valid(bento_bufh) then
+local function render_dashed(state)
+    local bufh = state.bufh
+    if not bufh or not vim.api.nvim_buf_is_valid(bufh) then
         return
     end
 
-    config = bento.get_config()
+    config = state:config()
     update_marks()
     local visible_marks, _ = get_page_marks()
     local _, _, needs_pagination = get_pagination_info()
@@ -832,12 +833,12 @@ local function render_dashed()
 
     for i = 1, #visible_marks do
         contents[i] = padding_str
-            .. generate_dash_line(visible_marks[i].buf_id)
+            .. state:dash_line(visible_marks[i].buf_id)
             .. padding_str
     end
 
     local dash_width = vim.fn.strwidth(
-        generate_dash_line(visible_marks[1] and visible_marks[1].buf_id or 0)
+        state:dash_line(visible_marks[1] and visible_marks[1].buf_id or 0)
     )
     local total_width = dash_width + 2 * padding
     local total_height = #visible_marks
@@ -849,29 +850,29 @@ local function render_dashed()
         total_height = total_height + 1
     end
 
-    vim.api.nvim_buf_set_option(bento_bufh, "modifiable", true)
-    vim.api.nvim_buf_set_lines(bento_bufh, 0, -1, false, contents)
-    vim.api.nvim_buf_set_option(bento_bufh, "modifiable", false)
+    vim.api.nvim_buf_set_option(bufh, "modifiable", true)
+    vim.api.nvim_buf_set_lines(bufh, 0, -1, false, contents)
+    vim.api.nvim_buf_set_option(bufh, "modifiable", false)
 
     update_window_size(total_width, total_height)
 
     local ns_id = vim.api.nvim_create_namespace("BentoDash")
-    vim.api.nvim_buf_clear_namespace(bento_bufh, ns_id, 0, -1)
+    vim.api.nvim_buf_clear_namespace(bufh, ns_id, 0, -1)
 
     for i, mark in ipairs(visible_marks) do
         local is_modified = vim.api.nvim_buf_get_option(mark.buf_id, "modified")
         if is_modified then
             vim.api.nvim_buf_add_highlight(
-                bento_bufh,
+                bufh,
                 ns_id,
                 config.highlights.modified,
                 i - 1,
                 0,
                 -1
             )
-        elseif not is_buffer_active(mark.buf_id) then
+        elseif not state:is_buffer_active(mark.buf_id) then
             vim.api.nvim_buf_add_highlight(
-                bento_bufh,
+                bufh,
                 ns_id,
                 config.highlights.inactive_dash,
                 i - 1,
@@ -1584,9 +1585,9 @@ end
 
 --- Render the appropriate collapsed view based on minimal_menu mode
 --- @return nil
-local function render_collapsed()
+local function render_collapsed(state)
     if minimal_menu_active == "dashed" then
-        render_dashed()
+        render_dashed(state)
     elseif minimal_menu_active == "filename" then
         render_filename_collapsed()
     elseif minimal_menu_active == "full" then
@@ -1606,7 +1607,7 @@ local menu = State.new({
         if is_tabline_ui() then
             render_tabline_minimal()
         else
-            render_collapsed()
+            render_collapsed(menu)
         end
     end,
     on_enter_expanded = function()
@@ -1670,7 +1671,7 @@ function M.next_page()
         if is_expanded then
             render_expanded()
         else
-            render_collapsed()
+            render_collapsed(menu)
         end
     end
 end
@@ -1699,7 +1700,7 @@ function M.prev_page()
         if is_expanded then
             render_expanded()
         else
-            render_collapsed()
+            render_collapsed(menu)
         end
     end
 end
@@ -1783,7 +1784,7 @@ function M.toggle_menu(force_create)
 
     current_page = 1
     -- menu:open() enters `collapsed`; the on_enter hook renders via
-    -- render_collapsed(), which is a no-op when minimal_menu_active is nil,
+    -- render_collapsed(menu), which is a no-op when minimal_menu_active is nil,
     -- preserving the old "force_create with no minimal mode = window only".
     menu:open()
 end
@@ -1978,7 +1979,7 @@ function M.refresh_menu()
         render_expanded()
     else
         if minimal_menu_active then
-            render_collapsed()
+            render_collapsed(menu)
         end
     end
 end
@@ -2018,7 +2019,7 @@ function M.cycle_minimal_menu()
             M.toggle_menu()
         else
             if not is_expanded then
-                render_collapsed()
+                render_collapsed(menu)
             end
         end
     else
