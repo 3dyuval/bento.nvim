@@ -92,9 +92,7 @@ function M:fire(event)
     return false
   end
   local from = self.current
-  require("bento.notify").debug(
-    ("menu: %s --%s--> %s"):format(from, event, to)
-  )
+  require("bento.notify").debug(vim.inspect({ event = event, from = from, to = to }))
   local leave = self.hooks["on_leave_" .. from]
   local enter = self.hooks["on_enter_" .. to]
   if leave then

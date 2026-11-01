@@ -834,21 +834,23 @@ tabline.setup({
 --- (This pass wires transitions only; the remaining module-level state vars
 --- still live here and migrate to the instance in a follow-up.)
 local State = require("bento.state")
+-- Hooks take the State instance the FSM passes (enter(self)); they must NOT
+-- close over `menu`, which is nil while State.new is still constructing.
 local menu = State.new({
-    on_enter_collapsed = function()
+    on_enter_collapsed = function(self)
         is_expanded = false
         if is_tabline_ui() then
-            tabline.minimal(menu)
+            tabline.minimal(self)
         else
-            render_collapsed(menu)
+            render_collapsed(self)
         end
     end,
-    on_enter_expanded = function()
+    on_enter_expanded = function(self)
         is_expanded = true
         if is_tabline_ui() then
-            tabline.expanded(menu)
+            tabline.expanded(self)
         else
-            render.expanded(menu)
+            render.expanded(self)
         end
     end,
     on_enter_closed = function()
@@ -1274,14 +1276,16 @@ end
 function M.open_menu()
     M.setup_state()
 
-    local menu_open = bento_win_id and vim.api.nvim_win_is_valid(bento_win_id)
-
-    if menu_open and config.ui.floating.toggle_on_reexpand then
-        M.close_menu()
+    -- Source of truth is the state machine, not the floating window handle —
+    -- in tabline mode there is no bento_win_id but the menu is still "open".
+    if menu:is_expanded() and config.ui.floating.toggle_on_reexpand then
+        -- Re-press while expanded: collapse back (to the always-on minimal
+        -- view if configured, else fully close via collapse_menu's fallback).
+        M.collapse_menu()
         return
     end
 
-    if not menu_open then
+    if menu:is_closed() then
         M.toggle_menu(true)
     end
     M.expand_menu()
