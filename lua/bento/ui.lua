@@ -877,6 +877,7 @@ function M.close_menu()
     end
     bento_win_id = nil
     bento_bufh = nil
+    menu.bufh = nil
     current_action = nil
     current_page = 1
     clear_selection_keymaps()
@@ -1016,6 +1017,7 @@ function M.toggle_menu(force_create)
     local win_info = create_window(total_buffers, initial_width)
     bento_win_id = win_info.win_id
     bento_bufh = win_info.bufnr
+    menu.bufh = win_info.bufnr
 
     current_page = 1
     -- menu:open() enters `collapsed`; the on_enter hook renders via
